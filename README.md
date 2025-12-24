@@ -1,2 +1,20 @@
-# Unity-YKToolkit
-🛠️ Unity Pro Toolbox v1.6 - The ultimate productivity suite for Unity developers. Auto-Material, Snap-to-Ground, Batch Rename, Bake Quality Presets, and more. | Unity 开发者生产力套装：一键材质、物理对齐、烘焙预设切换。
+# Unity YKToolbox v1.6 - RepinSKY -2606360985@QQ.COM
+
+🚀 Unity 开发者省力工具箱 (v1.6) - 集成智能 PBR 材质生成、物理对齐、批量重命名、烘焙精度快切等 12 项功能。优化场景搭建与资产管理工作流。
+
+## 🌟 核心功能
+* **智能材质流**: 自动识别贴图关键词并链接 PBR 材质。
+* **场景布置**: 包含物理对齐地面、随机变换、等距分布及布局助手。
+* **批量管理**: 批量重命名、资产一键替换、批量静态标志位设置。
+* **项目维护**: 查找重复物体、清理 Missing Scripts、缓存清理。
+* **光照烘焙**: 6档精度预设快速切换，支持烘焙进度显示与时间预估。
+* **快速创建**: 选中位置一键生成灯光、探针、Volume 等常用组件。
+
+## 🚀 快速开始
+1. 将脚本放入工程的 `Editor` 文件夹下。
+2. 在 Unity 顶部菜单栏找到 `Tools > 🚀 Unity Pro 终极工具箱` 即可打开。
+   
+## 🤝 参与贡献
+本项目目前由个人维护，非常希望大家能一起参与进来，把这个工具箱丰满完善。
+- 如果你有好的想法或发现了 Bug，欢迎提交 Issue 或 Pull Request。
+- 交流与反馈：2606360985@qq.com
