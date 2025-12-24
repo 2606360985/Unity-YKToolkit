@@ -1,4 +1,4 @@
-# Unity YKToolbox v1.6 - RepinSKY -2606360985@QQ.COM
+# Unity YKToolbox v1.6 - RepinSKY
 
 🚀 Unity 开发者省力工具箱 (v1.6) - 集成智能 PBR 材质生成、物理对齐、批量重命名、烘焙精度快切等 12 项功能。优化场景搭建与资产管理工作流。
 
