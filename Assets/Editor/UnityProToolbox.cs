@@ -6,10 +6,17 @@ using System.Linq;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Unity 开发者终极生产力工具箱 - v1.6 - RepinSKY
+/// Unity 开发者终极生产力工具箱 - v1.7 - RepinSKY
 /// 包含：智能批量材质生成、物理对齐、批量重命名、资产替换、布局助手、系统清理、
 ///       快速对齐与等距分布、批量静态设置、查找重复物体、烘焙精度双档切换、快速创建助手
 ///       (增强版烘焙控制：预设配置、时间预估、进度显示、自动烘焙)
+///       
+/// v1.7 新增功能：
+/// - ✅ 模块折叠系统（默认折叠，点击展开）
+/// - ✅ 拖拽排序功能（支持自定义模块顺序）
+/// - ✅ 拖拽后标题序号自动更新
+/// - ✅ 安全的图标加载系统（避免警告）
+/// - ✅ 界面优化（紧凑布局，自定义间距）
 /// </summary>
 public class UnityProToolbox : EditorWindow
 {
@@ -103,6 +110,37 @@ public class UnityProToolbox : EditorWindow
     // --- [12. 快速创建模块变量] ---
     private bool createAtSelection = true;
 
+    // --- [模块折叠和排序系统] ---
+    private class ModuleInfo
+    {
+        public int id;
+        public bool isExpanded;
+        public string baseTitle;
+        public string iconName;
+        public Color headerColor;
+        public Color bgColor;
+        public System.Action drawContent;
+
+        public ModuleInfo(int id, string baseTitle, string iconName, Color headerColor, Color bgColor, System.Action drawContent)
+        {
+            this.id = id;
+            this.baseTitle = baseTitle;
+            this.iconName = iconName;
+            this.headerColor = headerColor;
+            this.bgColor = bgColor;
+            this.drawContent = drawContent;
+            this.isExpanded = false; // 默认折叠
+        }
+    }
+
+    private List<ModuleInfo> modules = new List<ModuleInfo>();
+    private int draggedModuleIndex = -1;
+    private int dragTargetIndex = -1;
+    private Vector2 dragStartPos;
+    private int dragControlID = -1;
+    private const string MODULE_ORDER_KEY = "UnityProToolbox_ModuleOrder";
+    private const string MODULE_EXPANDED_KEY = "UnityProToolbox_ModuleExpanded_";
+
     [MenuItem("Tools/🚀Unity省力小工具箱")]
     public static void ShowWindow() => GetWindow<UnityProToolbox>("Pro Toolbox");
 
@@ -110,6 +148,8 @@ public class UnityProToolbox : EditorWindow
     {
         // 加载保存的烘焙设置
         LoadBakeSettings();
+        // 初始化模块系统
+        InitializeModules();
     }
 
     private void OnGUI()
@@ -119,8 +159,308 @@ public class UnityProToolbox : EditorWindow
 
         scrollPos = EditorGUILayout.BeginScrollView(scrollPos);
 
-        // --- 模块 1：智能批量材质生成 ---
-        BeginSection("1. 智能批量材质生成", "d_Material", new Color(0.2f, 0.6f, 1f), new Color(0.4f, 0.7f, 1f));
+        // 拖拽时每帧重置目标索引，让模块基于鼠标悬停重新计算
+        //（包括 MouseUp 帧：如果松手不在任何标题栏上，就不会发生移动）
+        if (draggedModuleIndex >= 0)
+            dragTargetIndex = -1;
+
+        // 绘制所有模块（按顺序）
+        for (int i = 0; i < modules.Count; i++)
+        {
+            DrawDraggableModule(i);
+        }
+
+        // 处理全局拖拽事件（放在模块绘制之后，确保 MouseUp 时已计算出 dragTargetIndex）
+        HandleGlobalDragEvents();
+
+        EditorGUILayout.Space(20);
+        EditorGUILayout.EndScrollView();
+    }
+
+    private void HandleGlobalDragEvents()
+    {
+        Event evt = Event.current;
+
+        // 处理拖拽结束事件
+        if (draggedModuleIndex >= 0)
+        {
+            // 拖拽中：吞掉 MouseDrag，避免其它控件抢事件，同时持续刷新
+            if (evt.type == EventType.MouseDrag)
+            {
+                evt.Use();
+                Repaint();
+                return;
+            }
+
+            if (evt.type == EventType.MouseUp)
+            {
+                // 执行模块移动
+                if (dragTargetIndex >= 0 && draggedModuleIndex != dragTargetIndex && dragTargetIndex < modules.Count)
+                {
+                    var draggedModule = modules[draggedModuleIndex];
+                    modules.RemoveAt(draggedModuleIndex);
+
+                    int insertIndex = dragTargetIndex;
+                    if (draggedModuleIndex < dragTargetIndex)
+                        insertIndex--;
+
+                    if (insertIndex >= 0 && insertIndex <= modules.Count)
+                    {
+                        modules.Insert(insertIndex, draggedModule);
+
+                        // 保存新的顺序
+                        SaveModuleOrder();
+
+                        GUI.changed = true;
+                    }
+                }
+
+                // 重置拖拽状态
+                draggedModuleIndex = -1;
+                dragTargetIndex = -1;
+                GUIUtility.hotControl = 0;
+                dragControlID = -1;
+                evt.Use();
+                Repaint();
+            }
+            // 如果鼠标移出窗口，也重置状态
+            else if (evt.type == EventType.MouseLeaveWindow)
+            {
+                draggedModuleIndex = -1;
+                dragTargetIndex = -1;
+                GUIUtility.hotControl = 0;
+                dragControlID = -1;
+                Repaint();
+            }
+        }
+    }
+
+    private void InitializeModules()
+    {
+        modules.Clear();
+
+        // 加载保存的模块顺序
+        string savedOrder = EditorPrefs.GetString(MODULE_ORDER_KEY, "");
+        int[] moduleOrder = null;
+
+        if (!string.IsNullOrEmpty(savedOrder))
+        {
+            string[] orderStrings = savedOrder.Split(',');
+            moduleOrder = new int[orderStrings.Length];
+            for (int i = 0; i < orderStrings.Length; i++)
+            {
+                if (int.TryParse(orderStrings[i], out int id))
+                    moduleOrder[i] = id;
+            }
+        }
+
+        // 定义所有模块
+        List<ModuleInfo> tempModules = new List<ModuleInfo>
+        {
+            new ModuleInfo(1, "智能批量材质生成", "d_Material", new Color(0.2f, 0.6f, 1f), new Color(0.4f, 0.7f, 1f), DrawModule1),
+            new ModuleInfo(2, "物理对齐", "d_MoveTool", new Color(0.2f, 0.8f, 0.3f), new Color(0.5f, 1f, 0.5f), DrawModule2),
+            new ModuleInfo(3, "批量重命名", "d_TextAsset", new Color(0.7f, 0.7f, 0.7f), new Color(0.85f, 0.85f, 0.85f), DrawModule3),
+            new ModuleInfo(4, "资产替换", "d_Prefab", new Color(1f, 0.7f, 0.2f), new Color(1f, 0.8f, 0.4f), DrawModule4),
+            new ModuleInfo(5, "布局助手", "d_Grid", new Color(0.3f, 0.8f, 0.9f), new Color(0.7f, 1f, 1f), DrawModule5),
+            new ModuleInfo(6, "随机变换", "d_RotateTool", new Color(1f, 0.4f, 0.8f), new Color(1f, 0.5f, 1f), DrawModule6),
+            new ModuleInfo(7, "系统清理", "d_Settings", new Color(0.5f, 0.5f, 0.5f), Color.gray, DrawModule7),
+            new ModuleInfo(8, "快速对齐与等距分布", "d_Grid", new Color(0.3f, 0.6f, 1f), new Color(0.6f, 0.8f, 1f), DrawModule8),
+            new ModuleInfo(9, "批量静态设置", "d_Static", new Color(0.9f, 0.6f, 0.3f), new Color(0.9f, 0.7f, 0.5f), DrawModule9),
+            new ModuleInfo(10, "查找重复物体", "d_Search", new Color(1f, 0.5f, 0.5f), new Color(1f, 0.6f, 0.6f), DrawModule10),
+            new ModuleInfo(11, "烘焙精度双档切换", "d_Lighting", new Color(0.7f, 0.9f, 0.4f), new Color(0.8f, 0.9f, 0.5f), DrawModule11),
+            new ModuleInfo(12, "快速创建助手", "d_ToolHandleLocal", new Color(0.9f, 0.5f, 0.2f), new Color(0.9f, 0.6f, 0.4f), DrawModule12)
+        };
+
+        // 如果存在保存的顺序，按顺序排列；否则使用默认顺序
+        if (moduleOrder != null && moduleOrder.Length == tempModules.Count)
+        {
+            modules = new List<ModuleInfo>(tempModules.Count);
+            foreach (int id in moduleOrder)
+            {
+                var module = tempModules.Find(m => m.id == id);
+                if (module != null)
+                {
+                    // 加载折叠状态
+                    module.isExpanded = EditorPrefs.GetBool(MODULE_EXPANDED_KEY + id, false);
+                    modules.Add(module);
+                }
+            }
+            // 添加任何缺失的模块
+            foreach (var module in tempModules)
+            {
+                if (!modules.Exists(m => m.id == module.id))
+                {
+                    module.isExpanded = EditorPrefs.GetBool(MODULE_EXPANDED_KEY + module.id, false);
+                    modules.Add(module);
+                }
+            }
+        }
+        else
+        {
+            modules = tempModules;
+            // 加载折叠状态
+            foreach (var module in modules)
+            {
+                module.isExpanded = EditorPrefs.GetBool(MODULE_EXPANDED_KEY + module.id, false);
+            }
+        }
+    }
+
+    private void DrawDraggableModule(int index)
+    {
+        ModuleInfo module = modules[index];
+        Event evt = Event.current;
+
+        // 绘制折叠标题栏
+        EditorGUILayout.BeginVertical("box");
+
+        // 绘制标题栏背景
+        Rect titleRect = EditorGUILayout.GetControlRect(false, 26);
+        Color titleBgColor = new Color(module.headerColor.r * 0.15f, module.headerColor.g * 0.15f, module.headerColor.b * 0.15f, 0.3f);
+
+        // 如果正在拖拽此模块，高亮显示
+        if (draggedModuleIndex == index)
+        {
+            titleBgColor = new Color(module.headerColor.r * 0.4f, module.headerColor.g * 0.4f, module.headerColor.b * 0.4f, 0.5f);
+        }
+
+        EditorGUI.DrawRect(new Rect(titleRect.x, titleRect.y, titleRect.width, titleRect.height), titleBgColor);
+
+        // 绘制左侧彩色条
+        EditorGUI.DrawRect(new Rect(titleRect.x, titleRect.y, 4, titleRect.height), module.headerColor);
+
+        // 定义区域
+        Rect foldoutRect = new Rect(titleRect.x + 6, titleRect.y + 2, 20, 22);
+        Rect dragHandleRect = new Rect(titleRect.x + 28, titleRect.y + 4, 18, 18);
+
+        // 先处理拖拽开始（在 Foldout 之前，避免被拦截）
+        bool isInDragHandle = dragHandleRect.Contains(evt.mousePosition);
+        bool isInFoldout = foldoutRect.Contains(evt.mousePosition);
+        bool isInTitleRect = titleRect.Contains(evt.mousePosition);
+
+        // 处理拖拽开始（优先处理，避免被折叠按钮拦截）
+        if (evt.type == EventType.MouseDown && isInDragHandle && !isInFoldout && evt.button == 0 && draggedModuleIndex == -1)
+        {
+            draggedModuleIndex = index;
+            dragStartPos = evt.mousePosition;
+            dragTargetIndex = -1;
+            dragControlID = GUIUtility.GetControlID("ModuleDrag".GetHashCode(), FocusType.Passive);
+            GUIUtility.hotControl = dragControlID;
+            evt.Use();
+            Repaint();
+        }
+
+        // 拖拽中：基于鼠标悬停实时计算目标模块（不 Use 事件，让所有模块都有机会更新）
+        if (draggedModuleIndex >= 0 && index != draggedModuleIndex && isInTitleRect && !isInFoldout)
+        {
+            dragTargetIndex = index;
+        }
+
+        // 绘制拖拽手柄图标（尝试多个图标名称）
+        Texture2D dragHandleIcon = GetIconSafely("d_Grid", "Grid", "d_MoveTool", "MoveTool", "d_Grip");
+
+        // 绘制拖拽手柄
+        if (dragHandleIcon != null)
+        {
+            // 使用图标
+            if (isInDragHandle || draggedModuleIndex == index)
+            {
+                GUI.color = new Color(1f, 1f, 1f, 0.8f);
+                GUI.DrawTexture(dragHandleRect, dragHandleIcon, ScaleMode.ScaleToFit);
+                GUI.color = Color.white;
+            }
+            else
+            {
+                GUI.color = new Color(1f, 1f, 1f, 0.4f);
+                GUI.DrawTexture(dragHandleRect, dragHandleIcon, ScaleMode.ScaleToFit);
+                GUI.color = Color.white;
+            }
+        }
+        else
+        {
+            // 如果没有图标，绘制一个简单的拖拽手柄（三条横线）
+            Color handleColor = (isInDragHandle || draggedModuleIndex == index) ?
+                                new Color(0.7f, 0.7f, 0.7f, 0.9f) :
+                                new Color(0.5f, 0.5f, 0.5f, 0.5f);
+
+            float lineWidth = 12f;
+            float lineHeight = 1.5f;
+            float spacing = 2.5f;
+            float startX = dragHandleRect.x + (dragHandleRect.width - lineWidth) * 0.5f;
+            float startY = dragHandleRect.y + (dragHandleRect.height - (lineHeight * 3 + spacing * 2)) * 0.5f;
+
+            for (int i = 0; i < 3; i++)
+            {
+                Rect lineRect = new Rect(startX, startY + i * (lineHeight + spacing), lineWidth, lineHeight);
+                EditorGUI.DrawRect(lineRect, handleColor);
+            }
+        }
+
+        // 绘制折叠按钮（在拖拽事件处理之后，避免拦截拖拽事件）
+        // 如果正在拖拽，禁用折叠按钮的交互
+        EditorGUI.BeginDisabledGroup(draggedModuleIndex >= 0);
+        bool newExpanded = EditorGUI.Foldout(foldoutRect, module.isExpanded, "", true);
+        EditorGUI.EndDisabledGroup();
+
+        if (newExpanded != module.isExpanded && draggedModuleIndex == -1)
+        {
+            module.isExpanded = newExpanded;
+            EditorPrefs.SetBool(MODULE_EXPANDED_KEY + module.id, module.isExpanded);
+            GUI.changed = true;
+        }
+
+        // 绘制标题和图标
+        GUIStyle titleStyle = new GUIStyle(EditorStyles.boldLabel)
+        {
+            fontSize = 12,
+            normal = { textColor = module.headerColor },
+            padding = new RectOffset(8, 0, 3, 0)
+        };
+
+        string displayTitle = $"{index + 1}. {module.baseTitle}";
+        GUIContent titleContent = new GUIContent(" " + displayTitle);
+        // 安全地加载图标
+        Texture2D icon = GetIconSafely(module.iconName);
+        if (icon != null)
+        {
+            titleContent.image = icon;
+        }
+
+        // 标题标签位置：折叠按钮(6+20=26) + 拖拽手柄(28+18=46) + 间距(4) = 50
+        Rect labelRect = new Rect(titleRect.x + 50, titleRect.y + 2, titleRect.width - 52, 22);
+        GUI.Label(labelRect, titleContent, titleStyle);
+
+        // 如果正在拖拽其他模块到此位置，显示插入指示线
+        if (draggedModuleIndex >= 0 && draggedModuleIndex != index && dragTargetIndex == index)
+        {
+            EditorGUI.DrawRect(new Rect(titleRect.x, titleRect.y - 2, titleRect.width, 2), new Color(0.2f, 0.6f, 1f, 0.8f));
+        }
+
+        EditorGUILayout.Space(-3);
+
+        // 如果展开，绘制内容
+        if (module.isExpanded)
+        {
+            EditorGUILayout.BeginVertical("box");
+            module.drawContent?.Invoke();
+            EditorGUILayout.EndVertical();
+        }
+
+        EditorGUILayout.Space(-3);
+        EditorGUILayout.EndVertical();
+        EditorGUILayout.Space(-3);
+    }
+
+    private void SaveModuleOrder()
+    {
+        string order = string.Join(",", modules.Select(m => m.id.ToString()));
+        EditorPrefs.SetString(MODULE_ORDER_KEY, order);
+    }
+
+    // ================= 各模块的绘制方法 =================
+
+    private void DrawModule1()
+    {
         EditorGUILayout.HelpBox(
             "操作：在 Project 窗口选中【贴图文件夹】或【多张贴图】，点击下方按钮。\n" +
             "系统会自动根据文件名关键词匹配 Albedo/Normal/Mask/Height 并生成材质。\n\n" +
@@ -133,16 +473,16 @@ public class UnityProToolbox : EditorWindow
             "   支持格式：前缀_类型、前缀类型、类型（无前缀）等",
             MessageType.Info);
         DrawIconButton("✨ 一键识别并生成材质", "d_Material", new Color(0.2f, 0.6f, 1f), 40, CreateMaterialsFromSelection);
-        EndSection();
+    }
 
-        // --- 模块 2：物理对齐 ---
-        BeginSection("2. 物理对齐", "d_MoveTool", new Color(0.2f, 0.8f, 0.3f), new Color(0.5f, 1f, 0.5f));
+    private void DrawModule2()
+    {
         groundLayerMask = LayerMaskField("地面层级", groundLayerMask);
         DrawIconButton("⬇️ 一键对齐地面 (Ctrl+G)", "d_MoveTool", new Color(0.2f, 0.8f, 0.3f), 30, SnapToGroundPro);
-        EndSection();
+    }
 
-        // --- 模块 3：批量重命名 ---
-        BeginSection("3. 批量重命名", "d_TextAsset", new Color(0.7f, 0.7f, 0.7f), new Color(0.85f, 0.85f, 0.85f));
+    private void DrawModule3()
+    {
         renameReplaceAll = EditorGUILayout.Toggle("完全替换名", renameReplaceAll);
         if (renameReplaceAll) renameBase = EditorGUILayout.TextField("基础名", renameBase);
         EditorGUILayout.BeginHorizontal();
@@ -152,49 +492,49 @@ public class UnityProToolbox : EditorWindow
         renameStartIndex = EditorGUILayout.IntField("起始编号", renameStartIndex);
         renameDigits = EditorGUILayout.IntSlider("编号位数", renameDigits, 1, 5);
         DrawIconButton("📝 执行批量重命名", "d_TextAsset", new Color(0.6f, 0.6f, 0.6f), 25, BatchRenamePro);
-        EndSection();
+    }
 
-        // --- 模块 4：资产替换 ---
-        BeginSection("4. 资产替换", "d_Prefab", new Color(1f, 0.7f, 0.2f), new Color(1f, 0.8f, 0.4f));
+    private void DrawModule4()
+    {
         replacementPrefab = (GameObject)EditorGUILayout.ObjectField("目标预制体", replacementPrefab, typeof(GameObject), false);
         DrawIconButton("🔄 一键替换选中项", "d_Prefab", new Color(1f, 0.7f, 0.2f), 25, ReplaceWithPrefab);
-        EndSection();
+    }
 
-        // --- 模块 5：布局助手 ---
-        BeginSection("5. 布局助手", "d_Grid", new Color(0.3f, 0.8f, 0.9f), new Color(0.7f, 1f, 1f));
+    private void DrawModule5()
+    {
         duplicateOffset = EditorGUILayout.Vector3Field("阵列偏移量", duplicateOffset);
         DrawIconButton("📋 偏移复制并移动", "d_TreeEditor.Duplicate", new Color(0.3f, 0.8f, 0.9f), 25, DuplicateWithOffset);
         EditorGUILayout.Space(2);
         DrawIconButton("📁 快速打组", "d_Folder", new Color(0.3f, 0.8f, 0.9f), 25, QuickGroup);
-        EndSection();
+    }
 
-        // --- 模块 6：随机变换 ---
-        BeginSection("6. 随机变换", "d_RotateTool", new Color(1f, 0.4f, 0.8f), new Color(1f, 0.5f, 1f));
+    private void DrawModule6()
+    {
         randYRotation = EditorGUILayout.Toggle("随机 Y 轴旋转", randYRotation);
         EditorGUILayout.BeginHorizontal();
         minScale = EditorGUILayout.FloatField("Min Scale", minScale);
         maxScale = EditorGUILayout.FloatField("Max Scale", maxScale);
         EditorGUILayout.EndHorizontal();
         DrawIconButton("🎲 应用随机效果", "d_RotateTool", new Color(1f, 0.4f, 0.8f), 25, ApplyRandomization);
-        EndSection();
+    }
 
-        // --- 模块 7：维护与系统 ---
-        BeginSection("7. 系统清理", "d_Settings", new Color(0.5f, 0.5f, 0.5f), Color.gray);
+    private void DrawModule7()
+    {
         DrawIconButton("⚠️ 查找场景 Missing Scripts", "d_console.warnicon", new Color(0.9f, 0.7f, 0.2f), 25, FindMissingScripts);
         DrawIconButton("🗑️ 清空所有本地缓存", "d_Refresh", new Color(0.7f, 0.7f, 0.7f), 25, ClearCache);
         DrawIconButton("🏷️ 一键选中同 Tag 物体", "d_FilterByLabel", new Color(0.6f, 0.8f, 1f), 25, SelectByTag);
-        EndSection();
+    }
 
-        // --- 模块 8：快速对齐与等距分布 ---
-        BeginSection("8. 快速对齐与等距分布", "d_Grid", new Color(0.3f, 0.6f, 1f), new Color(0.6f, 0.8f, 1f));
+    private void DrawModule8()
+    {
         EditorGUILayout.HelpBox("选中多个物体，按轴方向对齐或等距分布。", MessageType.Info);
         alignAxis = EditorGUILayout.Popup("对齐轴", alignAxis, new string[] { "X 轴", "Y 轴", "Z 轴" });
         alignMode = EditorGUILayout.Toggle("等距分布模式", alignMode);
         DrawIconButton(alignMode ? "📏 执行等距分布" : "📐 执行对齐", "d_Grid", new Color(0.3f, 0.6f, 1f), 30, AlignAndDistribute);
-        EndSection();
+    }
 
-        // --- 模块 9：批量静态设置 ---
-        BeginSection("9. 批量静态设置", "d_Static", new Color(0.9f, 0.6f, 0.3f), new Color(0.9f, 0.7f, 0.5f));
+    private void DrawModule9()
+    {
         EditorGUILayout.HelpBox("批量设置选中物体的静态标志位，用于场景优化和光照烘焙。", MessageType.Info);
         batchContributeGI = EditorGUILayout.Toggle("Contribute GI", batchContributeGI);
         batchReflectionProbe = EditorGUILayout.Toggle("Reflection Probe Static", batchReflectionProbe);
@@ -205,22 +545,23 @@ public class UnityProToolbox : EditorWindow
         batchOffMeshLinkGeneration = EditorGUILayout.Toggle("Off Mesh Link Generation", batchOffMeshLinkGeneration);
         EditorGUILayout.Space(5);
         DrawIconButton("⚙️ 应用静态设置到选中物体", "d_Static", new Color(0.9f, 0.6f, 0.3f), 30, BatchStaticToggle);
-        EndSection();
+    }
 
-        // --- 模块 10：查找重复物体 ---
-        BeginSection("10. 查找重复物体", "d_Search", new Color(1f, 0.5f, 0.5f), new Color(1f, 0.6f, 0.6f));
+    private void DrawModule10()
+    {
         EditorGUILayout.HelpBox("扫描场景中所有层级（包括子物体）的位置、旋转、模型完全一致的重复物体并高亮显示。", MessageType.Info);
         DrawIconButton("🔍 扫描并高亮重复物体", "d_Search", new Color(1f, 0.5f, 0.5f), 30, FindDuplicateObjects);
-        EndSection();
+    }
 
-        // --- 模块 11：烘焙精度双档切换 (Bake Quality Pro) ---
-        BeginSection("11. 烘焙精度双档切换", "d_Lighting", new Color(0.7f, 0.9f, 0.4f), new Color(0.8f, 0.9f, 0.5f));
+    private void DrawModule11()
+    {
         EditorGUILayout.HelpBox("提示：现代 Unity 必须在 Lighting 窗口先创建 'Lighting Settings' 资产才能生效。", MessageType.Info);
 
         EditorGUILayout.BeginHorizontal();
         Color originalColor = GUI.color;
         GUI.color = isPreviewMode ? new Color(0.2f, 0.8f, 1f) : new Color(1f, 0.5f, 0.5f);
-        GUIContent modeContent = new GUIContent(isPreviewMode ? "预览模式" : "生产模式", EditorGUIUtility.IconContent("d_Lighting").image);
+        Texture2D lightingIcon = GetIconSafely("d_Lighting");
+        GUIContent modeContent = new GUIContent(isPreviewMode ? "预览模式" : "生产模式", lightingIcon);
         if (GUILayout.Button(modeContent, GUILayout.Height(30)))
         {
             isPreviewMode = !isPreviewMode;
@@ -264,10 +605,10 @@ public class UnityProToolbox : EditorWindow
             Rect r = EditorGUILayout.GetControlRect(false, 20);
             EditorGUI.ProgressBar(r, bakeProgress, bakeStatus);
         }
-        EndSection();
+    }
 
-        // --- 模块 12：快速创建助手 ---
-        BeginSection("12. 快速创建助手", "d_ToolHandleLocal", new Color(0.9f, 0.5f, 0.2f), new Color(0.9f, 0.6f, 0.4f));
+    private void DrawModule12()
+    {
         createAtSelection = EditorGUILayout.Toggle("在选中位置创建", createAtSelection);
 
         EditorGUILayout.LabelField("📦 基础模型", EditorStyles.miniLabel);
@@ -300,10 +641,6 @@ public class UnityProToolbox : EditorWindow
         EditorGUILayout.Space(5);
         EditorGUILayout.LabelField("🌐 环境配置 (URP/HDRP)", EditorStyles.miniLabel);
         DrawIconButton("全局 Volume", "d_SceneViewFx", new Color(0.6f, 0.4f, 0.9f), 25, CreateVolume);
-        EndSection();
-
-        EditorGUILayout.Space(20);
-        EditorGUILayout.EndScrollView();
     }
 
     // ================= 核心功能逻辑 =================
@@ -1454,26 +1791,22 @@ public class UnityProToolbox : EditorWindow
         // 绘制标题和图标
         GUIStyle headerStyle = new GUIStyle(EditorStyles.boldLabel)
         {
-            fontSize = 13,
+            fontSize = 12,
             alignment = TextAnchor.MiddleLeft,
             normal = { textColor = Color.white },
             padding = new RectOffset(15, 0, 0, 0)
         };
 
-        GUIContent headerContent = new GUIContent("🚀 Unity Pro Toolbox v1.6 | 智能批量材质 & 生产力工具 | RepinSKY");
+        GUIContent headerContent = new GUIContent("🚀 Unity Pro Toolbox v1.7 | 智能批量材质 & 生产力工具 | RepinSKY");
 
-        // 尝试添加图标
-        try
+        // 安全地添加图标
+        Texture2D headerIcon = GetIconSafely("d_Settings");
+        if (headerIcon != null)
         {
-            GUIContent iconContent = EditorGUIUtility.IconContent("d_Settings");
-            if (iconContent != null && iconContent.image != null)
-            {
-                headerContent.image = iconContent.image;
-            }
+            headerContent.image = headerIcon;
         }
-        catch { }
 
-        Rect labelRect = new Rect(headerRect.x + 10, headerRect.y + 8, headerRect.width - 20, headerRect.height - 16);
+        Rect labelRect = new Rect(headerRect.x + 10, headerRect.y, headerRect.width - 20, headerRect.height);
         GUI.Label(labelRect, headerContent, headerStyle);
 
         EditorGUILayout.Space(8);
@@ -1501,18 +1834,11 @@ public class UnityProToolbox : EditorWindow
 
         GUIContent titleContent = new GUIContent(" " + title);
 
-        // 尝试加载图标
-        try
+        // 安全地加载图标
+        Texture2D icon = GetIconSafely(iconName);
+        if (icon != null)
         {
-            GUIContent iconContent = EditorGUIUtility.IconContent(iconName);
-            if (iconContent != null && iconContent.image != null)
-            {
-                titleContent.image = iconContent.image;
-            }
-        }
-        catch
-        {
-            // 如果图标加载失败，继续使用文本
+            titleContent.image = icon;
         }
 
         Rect labelRect = new Rect(titleRect.x + 8, titleRect.y + 2, titleRect.width - 16, 22);
@@ -1539,18 +1865,11 @@ public class UnityProToolbox : EditorWindow
 
         GUIContent buttonContent = new GUIContent(text);
 
-        // 尝试加载图标
-        try
+        // 安全地加载图标
+        Texture2D icon = GetIconSafely(iconName);
+        if (icon != null)
         {
-            GUIContent iconContent = EditorGUIUtility.IconContent(iconName);
-            if (iconContent != null && iconContent.image != null)
-            {
-                buttonContent.image = iconContent.image;
-            }
-        }
-        catch
-        {
-            // 如果图标加载失败，继续使用文本
+            buttonContent.image = icon;
         }
 
         // 创建按钮样式
@@ -1571,6 +1890,51 @@ public class UnityProToolbox : EditorWindow
         // 恢复原始颜色
         GUI.backgroundColor = originalBgColor;
         GUI.contentColor = originalContentColor;
+    }
+
+    // 安全地加载图标，避免警告
+    private Texture2D GetIconSafely(string iconName)
+    {
+        if (string.IsNullOrEmpty(iconName))
+            return null;
+
+        // 使用反射临时禁用日志，避免警告
+        var logType = UnityEngine.Application.GetStackTraceLogType(LogType.Warning);
+        UnityEngine.Application.SetStackTraceLogType(LogType.Warning, StackTraceLogType.None);
+
+        try
+        {
+            GUIContent iconContent = EditorGUIUtility.IconContent(iconName);
+            if (iconContent != null && iconContent.image != null)
+            {
+                // 检查图标是否真的存在（通过检查 tooltip 或 image 名称）
+                Texture2D icon = iconContent.image as Texture2D;
+                if (icon != null)
+                {
+                    return icon;
+                }
+            }
+        }
+        catch { }
+        finally
+        {
+            // 恢复日志输出设置
+            UnityEngine.Application.SetStackTraceLogType(LogType.Warning, logType);
+        }
+
+        return null;
+    }
+
+    // 尝试加载多个备选图标
+    private Texture2D GetIconSafely(params string[] iconNames)
+    {
+        foreach (string iconName in iconNames)
+        {
+            Texture2D icon = GetIconSafely(iconName);
+            if (icon != null)
+                return icon;
+        }
+        return null;
     }
 
     private int LayerMaskField(string label, int mask)
