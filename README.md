@@ -1,3 +1,6 @@
+
+【表面上是插件，其实它是 Unity 开发者的刮胡刀，工具箱大更新，架构重写】 https://www.bilibili.com/video/BV1dnigBLEbc/?share_source=copy_web&vd_source=2cb1a5658a3ccf09b304d890a043976d
+
 # Unity Pro Toolbox 更新日志
 
 ## [v2.0] - 2025-12-31
